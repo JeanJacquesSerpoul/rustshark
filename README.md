@@ -103,6 +103,38 @@ retire en une fois toutes les clés RustShark du trousseau.
 
 ---
 
+## Installateurs précompilés
+
+Chaque compilation de la branche `main` produit les installateurs dans l'onglet
+[Actions](https://github.com/JeanJacquesSerpoul/rustshark/actions) du dépôt
+(artefacts `rustshark-Windows`, `rustshark-Linux`, `rustshark-macOS`) :
+`.msi` / `.exe` pour Windows, `.deb` / `.rpm` / `.AppImage` pour Linux,
+`.dmg` pour macOS (Apple Silicon).
+
+Ils ne sont **pas signés** : Windows (SmartScreen) et macOS (Gatekeeper)
+affichent un avertissement à la première ouverture. Sous macOS, passez par
+*Réglages → Confidentialité et sécurité → Ouvrir quand même*.
+
+### Vérifier un téléchargement
+
+Chaque artefact contient un fichier `SHA256SUMS-<système>.txt` :
+
+```bash
+sha256sum -c SHA256SUMS-Linux.txt                 # Linux
+shasum -a 256 -c SHA256SUMS-macOS.txt             # macOS
+```
+
+```powershell
+Get-FileHash .\RustShark_0.1.0_x64-setup.exe      # Windows : comparer avec le fichier
+```
+
+Chaque fichier porte aussi une **attestation de provenance** GitHub, qui prouve
+qu'il a été compilé par la CI de ce dépôt à partir de son code source :
+
+```bash
+gh attestation verify RustShark_0.1.0_amd64.deb -R JeanJacquesSerpoul/rustshark
+```
+
 ## Installation rapide (scripts)
 
 Les scripts du dossier `scripts/` vérifient et installent les prérequis,

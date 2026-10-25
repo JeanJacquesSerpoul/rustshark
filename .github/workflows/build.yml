@@ -14,6 +14,11 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
 jobs:
   build:
     name: ${{ matrix.name }}
@@ -66,8 +71,27 @@ jobs:
       - name: Run tests
         run: cargo test --release -p rustshark-shared -p rustshark
 
+      - name: Collect bundles and SHA-256 checksums
+        shell: bash
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+        run: |
+          mkdir -p out
+          cp $BUNDLES out/
+          cd out
+          if command -v sha256sum >/dev/null; then sum="sha256sum"; else sum="shasum -a 256"; fi
+          # Git Bash on Windows marks binary mode with "*": keep the plain format
+          $sum * | sed 's/ \*/  /' > SHA256SUMS-${{ runner.os }}.txt
+          cat SHA256SUMS-${{ runner.os }}.txt
+
+      - name: Attest build provenance
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-checksums: out/SHA256SUMS-${{ runner.os }}.txt
+
       - uses: actions/upload-artifact@v6
         with:
           name: rustshark-${{ runner.os }}
-          path: ${{ matrix.bundles }}
+          path: out/
           if-no-files-found: error

@@ -2,7 +2,8 @@
 
 **Analyseur de trafic réseau pour tous** — l'équivalent de Wireshark, avec une
 interface pensée pour les débutants, des explications en langage simple
-(français / anglais) et un assistant IA (DeepSeek ou OpenRouter).
+(français / anglais) et un assistant IA (DeepSeek ou OpenRouter, avec votre
+propre clé API).
 
 Construit avec **Rust**, **Tauri 2** et **Leptos 0.8** (WebAssembly).
 
@@ -65,6 +66,15 @@ L'onglet Internet contacte ipinfo.io et Cloudflare, uniquement sur clic.
 Diagnostic en ligne de commande : `rustshark --network`.
 
 ### Assistant IA
+
+> **Clé API personnelle requise (BYOK, *Bring Your Own Key*)** : RustShark
+> n'inclut aucune clé ni abonnement. Pour utiliser l'assistant, créez une clé
+> chez [DeepSeek](https://platform.deepseek.com/api_keys) ou
+> [OpenRouter](https://openrouter.ai/keys), puis saisissez-la dans
+> **Réglages → Intelligence artificielle**. L'usage est facturé par ce
+> fournisseur, sur votre compte (OpenRouter propose aussi des modèles gratuits).
+> Sans clé, tout le reste de l'application fonctionne normalement.
+
 - **Analyse en conversation** : « Résume ce qui se passe », « Y a-t-il quelque
   chose de suspect ? »… sur toute la capture, les paquets filtrés ou un seul paquet.
   Les réponses arrivent en streaming ; les filtres proposés sont **cliquables**.

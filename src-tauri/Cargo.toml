@@ -1,0 +1,34 @@
+[package]
+name = "rustshark"
+version = "0.1.0"
+description = "RustShark — analyseur de trafic réseau accessible aux débutants, assisté par IA"
+edition = "2021"
+license = "MIT"
+default-run = "rustshark"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+rustshark-shared = { path = "../shared" }
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libloading = "0.9"
+parking_lot = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "native-tls", "http2", "charset", "system-proxy"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["sync", "time", "rt"] }
+keyring = { version = "4.2", features = ["v1"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_WiFi",
+    "Win32_Networking_WinSock",
+] }

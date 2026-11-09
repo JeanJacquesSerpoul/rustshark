@@ -118,9 +118,21 @@ Chaque compilation de la branche `main` produit les installateurs dans l'onglet
 `.msi` / `.exe` pour Windows, `.deb` / `.rpm` / `.AppImage` pour Linux,
 `.dmg` pour macOS (Apple Silicon).
 
-Ils ne sont **pas signés** : Windows (SmartScreen) et macOS (Gatekeeper)
-affichent un avertissement à la première ouverture. Sous macOS, passez par
-*Réglages → Confidentialité et sécurité → Ouvrir quand même*.
+Ils ne sont **pas signés** par un certificat d'éditeur : Windows (SmartScreen)
+et macOS (Gatekeeper) affichent un avertissement à la première ouverture.
+
+Sous macOS, l'application est signée « ad hoc » (sans compte Apple Developer) :
+1. Glissez RustShark dans *Applications*, puis ouvrez-la une première fois
+   (macOS refuse et affiche « Apple n'a pas pu vérifier… »).
+2. Allez dans *Réglages Système → Confidentialité et sécurité*, puis cliquez
+   sur *Ouvrir quand même* en bas de la page.
+
+Si macOS indique que l'application est **« endommagée »** (versions 0.1.2 et
+antérieures), retirez l'attribut de quarantaine dans le Terminal :
+
+```bash
+xattr -cr /Applications/RustShark.app
+```
 
 ### Vérifier un téléchargement
 

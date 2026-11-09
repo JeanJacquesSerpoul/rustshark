@@ -68,6 +68,15 @@ jobs:
       - name: Build application
         run: cargo tauri build
 
+      # An unsigned app is reported as "damaged" by Gatekeeper on Apple
+      # Silicon: make sure the bundle carries a valid (ad-hoc) signature
+      - name: Check macOS code signature
+        if: runner.os == 'macOS'
+        run: |
+          app=$(ls -d target/release/bundle/macos/*.app)
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app"
+
       - name: Run tests
         run: cargo test --release -p rustshark-shared -p rustshark
 

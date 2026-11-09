@@ -3955,7 +3955,7 @@ dependencies = [
 
 [[package]]
 name = "rustshark"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "futures-util",
@@ -3976,14 +3976,14 @@ dependencies = [
 
 [[package]]
 name = "rustshark-shared"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "rustshark-ui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

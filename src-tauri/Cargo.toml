@@ -1,6 +1,6 @@
 [package]
 name = "rustshark"
-version = "0.1.0"
+version = "0.1.1"
 description = "RustShark — analyseur de trafic réseau accessible aux débutants, assisté par IA"
 edition = "2021"
 license = "MIT"

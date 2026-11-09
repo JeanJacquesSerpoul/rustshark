@@ -188,6 +188,10 @@ Le script installe les dépendances (WebKitGTK, libpcap…), Rust via rustup,
 Trunk et la CLI Tauri, compile, installe, puis propose d'accorder les capacités
 `cap_net_raw,cap_net_admin` au programme pour capturer sans `sudo`.
 
+Les paquets `.deb` et `.rpm` accordent ces capacités eux-mêmes à chaque
+installation ou mise à jour (un double-clic sur le paquet suffit donc). Pour
+les retirer : `sudo setcap -r /usr/bin/rustshark`.
+
 | Option | Effet |
 |---|---|
 | `-y`, `--yes` | répond « oui » à tout |

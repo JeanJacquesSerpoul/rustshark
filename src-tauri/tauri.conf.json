@@ -38,6 +38,15 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": ["libcap2-bin"],
+        "postInstallScript": "linux/postinst.sh"
+      },
+      "rpm": {
+        "postInstallScript": "linux/postinst.sh"
+      }
+    }
   }
 }

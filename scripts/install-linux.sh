@@ -282,8 +282,13 @@ install_app() {
     ok "RustShark installé : $INSTALLED_BIN"
 }
 
+revoke_capture() {
+    # Les paquets .deb et .rpm accordent eux-mêmes les capacités : on les retire.
+    $SUDO setcap -r "$INSTALLED_BIN" 2>/dev/null || true
+}
+
 grant_capture() {
-    [ "$NO_SETCAP" -eq 1 ] && return 0
+    [ "$NO_SETCAP" -eq 1 ] && { revoke_capture; return 0; }
     step "Autorisation de capture réseau"
     info "La capture nécessite les capacités CAP_NET_RAW et CAP_NET_ADMIN."
     info "Les accorder au programme permet de capturer sans lancer RustShark avec sudo"
@@ -295,6 +300,7 @@ grant_capture() {
         caps="$( (getcap "$INSTALLED_BIN" || /usr/sbin/getcap "$INSTALLED_BIN" || /sbin/getcap "$INSTALLED_BIN") 2>/dev/null | head -n 1)"
         ok "Capacités accordées (${caps:-vérification impossible})"
     else
+        revoke_capture
         warn "Sans cela, lancez RustShark avec sudo pour capturer en direct."
     fi
 }

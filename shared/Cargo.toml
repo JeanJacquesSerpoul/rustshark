@@ -1,6 +1,6 @@
 [package]
 name = "rustshark-shared"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "MIT"
 description = "Types et langage de filtre partagés entre le backend Tauri et le frontend Leptos"

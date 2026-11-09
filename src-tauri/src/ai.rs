@@ -1,4 +1,4 @@
-//! Assistant IA : DeepSeek et OpenRouter (API compatibles OpenAI).
+//! Assistant IA via le proxy OpenRouter (API compatible OpenAI, voir `server/readme_openrouter.md`).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -8,43 +8,61 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use rustshark_shared::filter::SYNTAX_HELP;
-use rustshark_shared::{AiScope, AnalysisProfile, ChatMessage, Lang, ModelInfo, Provider};
+use rustshark_shared::{AiScope, AnalysisProfile, ChatMessage, Lang, ModelInfo};
 use serde_json::{json, Value};
 
 use crate::dissect::is_private;
 use crate::store::Store;
 
-fn chat_url(p: Provider) -> &'static str {
-    match p {
-        Provider::DeepSeek => "https://api.deepseek.com/chat/completions",
-        Provider::OpenRouter => "https://openrouter.ai/api/v1/chat/completions",
-    }
+/// Accès au serveur IA : URL de base (`.../v1`) et clé d'accès facultative du proxy.
+#[derive(Clone)]
+pub struct Server {
+    pub base: String,
+    pub key: Option<String>,
 }
 
-fn models_url(p: Provider) -> &'static str {
-    match p {
-        Provider::DeepSeek => "https://api.deepseek.com/models",
-        Provider::OpenRouter => "https://openrouter.ai/api/v1/models",
+impl Server {
+    /// Vérifie l'URL : la clé ne doit pas circuler en clair hors de la machine.
+    pub fn new(base: &str, key: Option<String>, lang: Lang) -> Result<Self, String> {
+        let base = base.trim().trim_end_matches('/').to_string();
+        let url = reqwest::Url::parse(&base).map_err(|e| format!("{} {base} ({e})", lang.pick("URL du serveur IA invalide :", "Invalid AI server URL:")))?;
+        let local = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1"));
+        match url.scheme() {
+            "https" => {}
+            "http" if local => {}
+            _ => {
+                return Err(lang
+                    .pick(
+                        "Le serveur IA doit être en https:// (http:// n'est accepté que sur cette machine).",
+                        "The AI server must use https:// (http:// is only accepted on this machine).",
+                    )
+                    .into())
+            }
+        }
+        Ok(Self { base, key })
     }
-}
 
-fn request(client: &reqwest::Client, p: Provider, url: &str, key: Option<&str>) -> reqwest::RequestBuilder {
-    let mut r = client.get(url);
-    if let Some(k) = key {
-        r = r.bearer_auth(k);
+    fn with_auth(&self, r: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let r = r.header("X-Title", "RustShark");
+        match &self.key {
+            Some(k) => r.bearer_auth(k),
+            None => r,
+        }
     }
-    if p == Provider::OpenRouter {
-        r = r.header("HTTP-Referer", "https://github.com/rustshark/rustshark").header("X-Title", "RustShark");
-    }
-    r
-}
 
-fn post(client: &reqwest::Client, p: Provider, key: &str) -> reqwest::RequestBuilder {
-    let mut r = client.post(chat_url(p)).bearer_auth(key);
-    if p == Provider::OpenRouter {
-        r = r.header("HTTP-Referer", "https://github.com/rustshark/rustshark").header("X-Title", "RustShark");
+    fn get(&self, client: &reqwest::Client, path: &str) -> reqwest::RequestBuilder {
+        self.with_auth(client.get(format!("{}{path}", self.base)))
     }
-    r
+
+    fn post(&self, client: &reqwest::Client, path: &str) -> reqwest::RequestBuilder {
+        self.with_auth(client.post(format!("{}{path}", self.base)))
+    }
+
+    /// `/health` du proxy, à la racine (avant `/v1` ou `/api/v1`).
+    fn health_url(&self) -> String {
+        let root = self.base.strip_suffix("/api/v1").or_else(|| self.base.strip_suffix("/v1")).unwrap_or(&self.base);
+        format!("{root}/health")
+    }
 }
 
 /// Transforme une erreur HTTP en message compréhensible.
@@ -56,9 +74,9 @@ async fn http_error(resp: reqwest::Response, lang: Lang) -> String {
         .and_then(|v| v["error"]["message"].as_str().map(String::from).or_else(|| v["message"].as_str().map(String::from)))
         .unwrap_or_else(|| body.chars().take(200).collect());
     let hint = match status {
-        401 => lang.pick("Clé API invalide ou révoquée.", "Invalid or revoked API key."),
-        402 => lang.pick("Crédit insuffisant sur le compte du fournisseur.", "Insufficient credit on the provider account."),
-        403 => lang.pick("Accès refusé par le fournisseur.", "Access denied by the provider."),
+        401 => lang.pick("Clé d'accès au serveur IA absente ou refusée (PROXY_API_KEYS).", "AI server access key missing or rejected (PROXY_API_KEYS)."),
+        402 => lang.pick("Crédit OpenRouter insuffisant.", "Insufficient OpenRouter credit."),
+        403 => lang.pick("Route refusée par le serveur IA (PROXY_ALLOWED_PATHS).", "Route refused by the AI server (PROXY_ALLOWED_PATHS)."),
         404 => lang.pick("Modèle introuvable : vérifiez son identifiant.", "Model not found: check its identifier."),
         429 => lang.pick("Trop de requêtes : patientez un peu.", "Too many requests: please wait a little."),
         500..=599 => lang.pick("Le service IA rencontre un problème, réessayez plus tard.", "The AI service has a problem, try again later."),
@@ -71,7 +89,7 @@ fn net_error(e: reqwest::Error, lang: Lang) -> String {
     if e.is_timeout() {
         lang.pick("Délai dépassé en contactant le service IA.", "Timed out contacting the AI service.").into()
     } else if e.is_connect() {
-        format!("{} ({e})", lang.pick("Impossible de joindre le service IA (connexion Internet ?)", "Cannot reach the AI service (Internet connection?)"))
+        format!("{} ({e})", lang.pick("Impossible de joindre le serveur IA (proxy démarré ? docker compose up -d)", "Cannot reach the AI server (is the proxy running? docker compose up -d)"))
     } else {
         e.to_string()
     }
@@ -84,9 +102,8 @@ fn messages_json(messages: &[ChatMessage]) -> Vec<Value> {
 /// Réponse en streaming. `on_delta(texte, est_un_raisonnement)`.
 pub async fn stream_chat(
     client: &reqwest::Client,
-    provider: Provider,
+    server: &Server,
     model: &str,
-    key: &str,
     messages: &[ChatMessage],
     cancel: Arc<AtomicBool>,
     lang: Lang,
@@ -98,7 +115,7 @@ pub async fn stream_chat(
         "stream": true,
         "temperature": 0.3,
     });
-    let resp = post(client, provider, key).json(&body).send().await.map_err(|e| net_error(e, lang))?;
+    let resp = server.post(client, "/chat/completions").json(&body).send().await.map_err(|e| net_error(e, lang))?;
     if !resp.status().is_success() {
         return Err(http_error(resp, lang).await);
     }
@@ -142,9 +159,8 @@ pub async fn stream_chat(
 
 pub async fn complete(
     client: &reqwest::Client,
-    provider: Provider,
+    server: &Server,
     model: &str,
-    key: &str,
     messages: &[ChatMessage],
     json_mode: bool,
     lang: Lang,
@@ -154,10 +170,10 @@ pub async fn complete(
         "messages": messages_json(messages),
         "temperature": 0.2,
     });
-    if json_mode && provider == Provider::DeepSeek {
+    if json_mode {
         body["response_format"] = json!({ "type": "json_object" });
     }
-    let resp = post(client, provider, key).json(&body).send().await.map_err(|e| net_error(e, lang))?;
+    let resp = server.post(client, "/chat/completions").json(&body).send().await.map_err(|e| net_error(e, lang))?;
     if !resp.status().is_success() {
         return Err(http_error(resp, lang).await);
     }
@@ -168,8 +184,24 @@ pub async fn complete(
         .ok_or_else(|| lang.pick("Réponse vide du modèle.", "Empty response from the model.").into())
 }
 
-pub async fn list_models(client: &reqwest::Client, provider: Provider, key: Option<&str>, lang: Lang) -> Result<Vec<ModelInfo>, String> {
-    let resp = request(client, provider, models_url(provider), key).send().await.map_err(|e| net_error(e, lang))?;
+/// Vérifie que le proxy répond (`/health`) puis que la clé éventuelle est acceptée (`/models`).
+pub async fn test_server(client: &reqwest::Client, server: &Server, lang: Lang) -> Result<String, String> {
+    let resp = client.get(server.health_url()).timeout(std::time::Duration::from_secs(10)).send().await.map_err(|e| net_error(e, lang))?;
+    if !resp.status().is_success() {
+        return Err(http_error(resp, lang).await);
+    }
+    let models = list_models(client, server, lang).await?;
+    Ok(format!(
+        "{} {} — {} {}",
+        lang.pick("✅ Serveur IA joignable :", "✅ AI server reachable:"),
+        server.base,
+        models.len(),
+        lang.pick("modèles disponibles", "models available")
+    ))
+}
+
+pub async fn list_models(client: &reqwest::Client, server: &Server, lang: Lang) -> Result<Vec<ModelInfo>, String> {
+    let resp = server.get(client, "/models").send().await.map_err(|e| net_error(e, lang))?;
     if !resp.status().is_success() {
         return Err(http_error(resp, lang).await);
     }
@@ -591,6 +623,30 @@ mod tests {
         a.protect("2a02:8434:6941:f101:b0ad:b1ab:730d:943d".parse().unwrap());
         let s = a.apply("me 2a02:8434:6941:f101:b0ad:b1ab:730d:943d tv 2a02:8434:6941:f101::42 google 2607:6bc0::10");
         assert_eq!(s, "me LAN-1 tv LAN-2 google 2607:6bc0::10");
+    }
+
+    #[test]
+    fn server_url_rules() {
+        let s = Server::new("http://127.0.0.1:9018/v1/", None, Lang::En).unwrap();
+        assert_eq!(s.base, "http://127.0.0.1:9018/v1");
+        assert_eq!(s.health_url(), "http://127.0.0.1:9018/health");
+        let s = Server::new("https://example.org/openrouter/v1", None, Lang::En).unwrap();
+        assert_eq!(s.health_url(), "https://example.org/openrouter/health");
+        assert_eq!(Server::new("http://localhost:9018/api/v1", None, Lang::En).unwrap().health_url(), "http://localhost:9018/health");
+        assert!(Server::new("http://example.org/v1", None, Lang::En).is_err());
+        assert!(Server::new("not a url", None, Lang::En).is_err());
+    }
+
+    #[test]
+    fn default_model_is_deepseek_flash() {
+        let ai = rustshark_shared::AiSettings::default();
+        assert_eq!(ai.model(), "~deepseek/deepseek-flash-latest");
+        assert_eq!(ai.base_url(), "http://127.0.0.1:9018/v1");
+        // Anciens réglages (fournisseurs directs) : on retombe sur les valeurs par défaut.
+        let old: rustshark_shared::AiSettings =
+            serde_json::from_str(r#"{"provider":"openrouter","deepseek_model":"deepseek-chat","openrouter_model":"openrouter/auto","anonymize":false}"#).unwrap();
+        assert_eq!(old.model(), "~deepseek/deepseek-flash-latest");
+        assert!(!old.anonymize);
     }
 
     #[test]

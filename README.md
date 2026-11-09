@@ -2,8 +2,8 @@
 
 **Analyseur de trafic réseau pour tous** — l'équivalent de Wireshark, avec une
 interface pensée pour les débutants, des explications en langage simple
-(français / anglais) et un assistant IA (DeepSeek ou OpenRouter, avec votre
-propre clé API).
+(français / anglais) et un assistant IA (DeepSeek Flash par défaut, via un
+proxy OpenRouter local).
 
 Construit avec **Rust**, **Tauri 2** et **Leptos 0.8** (WebAssembly).
 
@@ -67,13 +67,13 @@ Diagnostic en ligne de commande : `rustshark --network`.
 
 ### Assistant IA
 
-> **Clé API personnelle requise (BYOK, *Bring Your Own Key*)** : RustShark
-> n'inclut aucune clé ni abonnement. Pour utiliser l'assistant, créez une clé
-> chez [DeepSeek](https://platform.deepseek.com/api_keys) ou
-> [OpenRouter](https://openrouter.ai/keys), puis saisissez-la dans
-> **Réglages → Intelligence artificielle**. L'usage est facturé par ce
-> fournisseur, sur votre compte (OpenRouter propose aussi des modèles gratuits).
-> Sans clé, tout le reste de l'application fonctionne normalement.
+> **Serveur IA requis** : l'assistant passe **uniquement** par le proxy
+> OpenRouter décrit dans [`server/readme_openrouter.md`](server/readme_openrouter.md),
+> joignable par défaut sur `http://127.0.0.1:9018/v1`. C'est ce proxy qui
+> détient votre clé OpenRouter (`OPENROUTER_API_KEY` dans son `.env`) :
+> RustShark n'en a pas besoin. Démarrez-le avec `docker compose up -d`.
+> L'usage est facturé sur votre compte OpenRouter. Sans serveur, tout le reste
+> de l'application fonctionne normalement.
 
 - **Analyse en conversation** : « Résume ce qui se passe », « Y a-t-il quelque
   chose de suspect ? »… sur toute la capture, les paquets filtrés ou un seul paquet.
@@ -82,14 +82,20 @@ Diagnostic en ligne de commande : `rustshark --network`.
   mon PC contacte en arrière-plan ») ; l'IA produit un filtre de capture (BPF)
   et un filtre d'affichage, tous deux validés, les points à surveiller et la
   question à poser à la fin. Les configurations s'enregistrent comme **profils**.
-- **Fournisseurs** : DeepSeek (`deepseek-chat`, `deepseek-reasoner`) et
-  OpenRouter (des centaines de modèles, dont des gratuits ; liste chargée depuis l'API).
+- **Modèle** : DeepSeek Flash par défaut (`~deepseek/deepseek-flash-latest`,
+  alias OpenRouter qui suit la dernière version). Tout autre identifiant
+  OpenRouter peut être choisi dans **Réglages → Intelligence artificielle**
+  (bouton « Lister » pour charger ceux du serveur).
+- **Serveur distant** : derrière Caddy, indiquez `https://votre-domaine/openrouter/v1`
+  (`http://` n'est accepté qu'en local) et, si le proxy exige `PROXY_API_KEYS`,
+  la clé d'accès correspondante.
 - **Confidentialité** : seul un résumé (statistiques, noms, extrait de paquets)
   est envoyé, uniquement quand vous posez une question. Les IP privées et les
   adresses MAC sont masquées par défaut (`LAN-1`, `MAC-1`…).
 
-### Clés API dans le trousseau sécurisé
-Les clés ne sont **jamais** écrites dans un fichier ni renvoyées à l'interface :
+### Clé d'accès au serveur dans le trousseau sécurisé
+La clé d'accès facultative au proxy (`PROXY_API_KEYS`) n'est **jamais** écrite
+dans un fichier ni renvoyée à l'interface :
 
 | Système | Stockage |
 |---|---|
@@ -97,9 +103,10 @@ Les clés ne sont **jamais** écrites dans un fichier ni renvoyées à l'interfa
 | macOS | Trousseau (Keychain) |
 | Linux | Secret Service (GNOME Keyring, KWallet…) |
 
-Dans **Réglages → Intelligence artificielle**, chaque clé peut être supprimée
-individuellement, et le bouton **« Tout effacer »** (confirmation en deux clics)
-retire en une fois toutes les clés RustShark du trousseau.
+Dans **Réglages → Intelligence artificielle**, la clé peut être supprimée, et
+le bouton **« Tout effacer »** (confirmation en deux clics) retire en une fois
+toutes les clés RustShark du trousseau, y compris d'anciennes clés DeepSeek /
+OpenRouter enregistrées par les versions précédentes.
 
 ---
 
@@ -437,7 +444,7 @@ rustshark/
 │   ├── store.rs       stockage, vue filtrée, détails, statistiques, alertes
 │   ├── file_io.rs     lecture/écriture pcap et pcapng
 │   ├── interfaces.rs  noms lisibles et recommandation d'interface
-│   ├── ai.rs          DeepSeek / OpenRouter, contexte, anonymisation
+│   ├── ai.rs          proxy OpenRouter, contexte, anonymisation
 │   ├── mcp.rs         serveur MCP pour Claude (rustshark --mcp)
 │   ├── keystore.rs    trousseau sécurisé (crate keyring)
 │   ├── config.rs      réglages et profils (JSON, sans secrets)

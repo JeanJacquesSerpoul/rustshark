@@ -6,43 +6,55 @@
 //! au frontend.
 
 use keyring::Entry;
-use rustshark_shared::{KeyStatus, Provider};
+use rustshark_shared::KeyStatus;
 
 const SERVICE: &str = "rustshark";
+/// Clé d'accès au proxy IA (`PROXY_API_KEYS` côté serveur).
+const PROXY_KEY: &str = "proxy-api-key";
+/// Anciennes clés (accès direct DeepSeek / OpenRouter), effacées avec le reste.
+const LEGACY: [&str; 2] = ["deepseek-api-key", "openrouter-api-key"];
 
-fn entry(p: Provider) -> Result<Entry, String> {
-    Entry::new(SERVICE, &format!("{}-api-key", p.id())).map_err(|e| e.to_string())
+fn entry(name: &str) -> Result<Entry, String> {
+    Entry::new(SERVICE, name).map_err(|e| e.to_string())
 }
 
-pub fn set(p: Provider, key: &str) -> Result<(), String> {
-    let key = key.trim();
-    if key.is_empty() {
-        return Err("empty key".into());
-    }
-    entry(p)?.set_password(key).map_err(|e| e.to_string())
-}
-
-pub fn get(p: Provider) -> Result<Option<String>, String> {
-    match entry(p)?.get_password() {
+fn read(name: &str) -> Result<Option<String>, String> {
+    match entry(name)?.get_password() {
         Ok(k) => Ok(Some(k)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
 
-pub fn delete(p: Provider) -> Result<(), String> {
-    match entry(p)?.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+fn remove(name: &str) -> Result<bool, String> {
+    match entry(name)?.delete_credential() {
+        Ok(()) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
         Err(e) => Err(e.to_string()),
     }
 }
 
-/// Efface les clés de tous les fournisseurs. Renvoie le nombre de clés supprimées.
+pub fn set(key: &str) -> Result<(), String> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err("empty key".into());
+    }
+    entry(PROXY_KEY)?.set_password(key).map_err(|e| e.to_string())
+}
+
+pub fn get() -> Result<Option<String>, String> {
+    read(PROXY_KEY)
+}
+
+pub fn delete() -> Result<(), String> {
+    remove(PROXY_KEY).map(|_| ())
+}
+
+/// Efface toutes les clés RustShark (y compris les anciennes). Renvoie le nombre supprimé.
 pub fn delete_all() -> Result<u32, String> {
     let mut deleted = 0;
-    for p in Provider::ALL {
-        if get(p)?.is_some() {
-            delete(p)?;
+    for name in std::iter::once(PROXY_KEY).chain(LEGACY) {
+        if remove(name)? {
             deleted += 1;
         }
     }
@@ -53,17 +65,10 @@ pub fn status() -> KeyStatus {
     if let Err(e) = Entry::store_status() {
         return KeyStatus { store_ok: false, store_error: Some(e.to_string()), ..Default::default() };
     }
-    let mut err = None;
-    let mut has = |p| match get(p) {
-        Ok(k) => k.is_some(),
-        Err(e) => {
-            err = Some(e);
-            false
-        }
-    };
-    let deepseek = has(Provider::DeepSeek);
-    let openrouter = has(Provider::OpenRouter);
-    KeyStatus { deepseek, openrouter, store_ok: err.is_none(), store_error: err }
+    match get() {
+        Ok(k) => KeyStatus { proxy_key: k.is_some(), store_ok: true, store_error: None },
+        Err(e) => KeyStatus { proxy_key: false, store_ok: false, store_error: Some(e) },
+    }
 }
 
 pub fn store_name() -> &'static str {

@@ -76,7 +76,7 @@ pub fn Toolbar() -> impl IntoView {
 
             <button class="btn ai-btn" class:on=move || ctx.ai_open.get() on:click=move |_| ctx.ai_open.update(|v| *v = !*v)>
                 <Icon name="sparkles"/>{move || ctx.t("tb.ai")}
-                <Show when=move || !ctx.has_key()><span class="dot warn" title=move || ctx.t("ai.need_key")></span></Show>
+                <Show when=move || !ctx.ai_ready()><span class="dot warn" title=move || ctx.t("ai.offline.title")></span></Show>
             </button>
             <button class="icon-btn" title=move || ctx.t("tb.help") on:click=move |_| ctx.modal.set(Modal::Help)><Icon name="help"/></button>
             <button class="icon-btn" title=move || ctx.t("tb.settings") on:click=move |_| { ctx.settings_section.set("general"); ctx.modal.set(Modal::Settings) }><Icon name="settings"/></button>

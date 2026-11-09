@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use rustshark_shared::filter::{FIELDS, Kind};
-use rustshark_shared::{Lang, ModelInfo, Provider, Theme};
+use rustshark_shared::{Lang, ModelInfo, Theme, DEFAULT_AI_MODEL, DEFAULT_AI_SERVER};
 use serde::Serialize;
 
 use crate::api::call;
@@ -133,13 +133,7 @@ fn InterfacesBody() -> impl IntoView {
 
 #[derive(Serialize)]
 struct KeyArg {
-    provider: Provider,
     key: String,
-}
-
-#[derive(Serialize)]
-struct ProviderArg {
-    provider: Provider,
 }
 
 #[component]
@@ -226,37 +220,44 @@ fn GeneralSettings() -> impl IntoView {
 fn AiSettings() -> impl IntoView {
     let ctx = use_ctx();
     let key_input = RwSignal::new(String::new());
-    let test_result = RwSignal::new(None::<Result<String, String>>);
     let busy = RwSignal::new(false);
     let models = RwSignal::new(Vec::<ModelInfo>::new());
     let models_err = RwSignal::new(None::<String>);
-    let provider = Memo::new(move |_| ctx.settings.with(|s| s.ai.provider));
     let keystore = Memo::new(move |_| ctx.sys.with(|s| s.as_ref().map(|s| s.keystore_name.clone()).unwrap_or_default()));
 
-    let set_provider = move |p: Provider| {
+    let update = move |f: &dyn Fn(&mut rustshark_shared::AppSettings)| {
         let mut s = ctx.settings.get_untracked();
-        s.ai.provider = p;
+        f(&mut s);
         ctx.save_settings(s);
-        test_result.set(None);
+    };
+    let test = move || {
+        busy.set(true);
+        spawn_local(async move {
+            ctx.ai_status.set(Some(call::<_, String>("ai_test", &crate::api::NoArgs {}).await));
+            busy.set(false);
+        });
+    };
+    let set_server = move |url: String| {
+        let url = url.trim().to_string();
+        update(&move |s| s.ai.server_url = url.clone());
         models.set(Vec::new());
         models_err.set(None);
+        // Laisse la sauvegarde des réglages partir avant de tester.
+        set_timeout(test, std::time::Duration::from_millis(300));
     };
     let save_key = move || {
         let key = key_input.get_untracked();
         if key.trim().is_empty() {
             return;
         }
-        let provider = provider.get_untracked();
         busy.set(true);
         spawn_local(async move {
-            match call::<_, ()>("set_api_key", &KeyArg { provider, key }).await {
+            match call::<_, ()>("set_api_key", &KeyArg { key }).await {
                 Ok(()) => {
                     key_input.set(String::new());
                     ctx.reload_keys();
                     ctx.toast(ToastKind::Success, ctx.tu("se.key_saved"));
-                    if let Ok(msg) = call::<_, String>("ai_test", &ProviderArg { provider }).await {
-                        test_result.set(Some(Ok(msg)));
-                    }
+                    ctx.ai_status.set(Some(call::<_, String>("ai_test", &crate::api::NoArgs {}).await));
                 }
                 Err(e) => ctx.toast(ToastKind::Error, e),
             }
@@ -264,26 +265,15 @@ fn AiSettings() -> impl IntoView {
         });
     };
     let delete_key = move || {
-        let provider = provider.get_untracked();
         spawn_local(async move {
-            let _ = call::<_, ()>("delete_api_key", &ProviderArg { provider }).await;
+            let _ = call::<_, ()>("delete_api_key", &crate::api::NoArgs {}).await;
             ctx.reload_keys();
-            test_result.set(None);
-        });
-    };
-    let test = move || {
-        let provider = provider.get_untracked();
-        busy.set(true);
-        spawn_local(async move {
-            test_result.set(Some(call::<_, String>("ai_test", &ProviderArg { provider }).await));
-            busy.set(false);
         });
     };
     let load_models = move || {
-        let provider = provider.get_untracked();
         models_err.set(None);
         spawn_local(async move {
-            match call::<_, Vec<ModelInfo>>("ai_models", &ProviderArg { provider }).await {
+            match call::<_, Vec<ModelInfo>>("ai_models", &crate::api::NoArgs {}).await {
                 Ok(m) => models.set(m),
                 Err(e) => models_err.set(Some(e)),
             }
@@ -291,7 +281,6 @@ fn AiSettings() -> impl IntoView {
     };
     // Effacement de toutes les clés : un premier clic arme, un second confirme.
     let wipe_armed = RwSignal::new(false);
-    let any_key = Memo::new(move |_| ctx.keys.with(|k| k.deepseek || k.openrouter));
     let wipe = move || {
         if !wipe_armed.get_untracked() {
             wipe_armed.set(true);
@@ -301,65 +290,35 @@ fn AiSettings() -> impl IntoView {
         wipe_armed.set(false);
         spawn_local(async move {
             match call::<_, u32>("delete_all_api_keys", &crate::api::NoArgs {}).await {
-                Ok(n) => {
-                    test_result.set(None);
-                    ctx.toast(ToastKind::Success, format!("{} ({n})", ctx.tu("se.wiped")));
-                }
+                Ok(n) => ctx.toast(ToastKind::Success, format!("{} ({n})", ctx.tu("se.wiped"))),
                 Err(e) => ctx.toast(ToastKind::Error, e),
             }
             ctx.reload_keys();
         });
     };
     let set_model = move |m: String| {
-        let mut s = ctx.settings.get_untracked();
-        match s.ai.provider {
-            Provider::DeepSeek => s.ai.deepseek_model = m,
-            Provider::OpenRouter => s.ai.openrouter_model = m,
-        }
-        ctx.save_settings(s);
+        let m = m.trim().to_string();
+        update(&move |s| s.ai.model = m.clone());
     };
+    let custom_server = Memo::new(move |_| ctx.settings.with(|s| s.ai.base_url() != DEFAULT_AI_SERVER));
+    let custom_model = Memo::new(move |_| ctx.settings.with(|s| s.ai.model() != DEFAULT_AI_MODEL));
 
     view! {
         <div class="form">
             <p class="dim">{move || ctx.t("se.ai_intro")}</p>
-            <div class="provider-cards">
-                {Provider::ALL.into_iter().map(|p| view! {
-                    <button class="provider-card" class:on=move || provider.get() == p on:click=move |_| set_provider(p)>
-                        <strong>{p.label()}</strong>
-                        <small class="dim">{move || ctx.t(if p == Provider::DeepSeek { "se.ds_desc" } else { "se.or_desc" })}</small>
-                        {move || ctx.keys.with(|k| k.has(p)).then(|| view! { <span class="badge good"><Icon name="lock" class="small"/>{ctx.t("se.key_ok")}</span> })}
-                    </button>
-                }).collect_view()}
-            </div>
 
             <div class="field">
-                <span>{move || format!("{} {}", ctx.t("se.api_key"), provider.get().label())}</span>
-                {move || if ctx.keys.with(|k| k.has(provider.get())) {
-                    view! {
-                        <div class="key-row">
-                            <span class="key-saved"><Icon name="lock"/>{ctx.t("se.key_in_store")}" "<em>{keystore.get()}</em></span>
-                            <button class="btn small" on:click=move |_| test() disabled=move || busy.get()><Icon name="check"/>{ctx.t("se.test")}</button>
-                            <button class="btn small danger-ghost" on:click=move |_| delete_key()><Icon name="trash"/>{ctx.t("se.delete_key")}</button>
-                        </div>
-                    }.into_any()
-                } else {
-                    view! {
-                        <div class="key-row">
-                            <input type="password" autocomplete="off" placeholder="sk-…" prop:value=move || key_input.get()
-                                on:input=move |ev| key_input.set(event_target_value(&ev))
-                                on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Enter" { save_key() }/>
-                            <button class="btn primary small" on:click=move |_| save_key() disabled=move || busy.get() || key_input.get().trim().is_empty()>
-                                <Icon name="lock"/>{ctx.t("se.save_key")}
-                            </button>
-                        </div>
-                    }.into_any()
-                }}
-                <small class="dim">
-                    {move || ctx.t("se.key_h")}" "
-                    <button class="link" on:click=move |_| ctx.open_url(crate::ai_panel::provider_key_url(provider.get_untracked()))>{move || ctx.t("se.get_key")}</button>
-                </small>
-                {move || ctx.keys.get().store_error.map(|e| view! { <small class="bad">{format!("{} {e}", ctx.t("se.store_err"))}</small> })}
-                {move || test_result.get().map(|r| match r {
+                <span>{move || ctx.t("se.server")}</span>
+                <div class="key-row">
+                    <input type="text" class="mono" spellcheck="false" prop:value=move || ctx.settings.with(|s| s.ai.base_url().to_string())
+                        on:change=move |ev| set_server(event_target_value(&ev))/>
+                    <button class="btn small" on:click=move |_| test() disabled=move || busy.get()><Icon name="check"/>{move || ctx.t("se.test")}</button>
+                    <Show when=move || custom_server.get()>
+                        <button class="btn small" on:click=move |_| set_server(DEFAULT_AI_SERVER.into())><Icon name="refresh"/>{move || ctx.t("se.default")}</button>
+                    </Show>
+                </div>
+                <small class="dim">{move || ctx.t("se.server_h")}</small>
+                {move || ctx.ai_status.get().map(|r| match r {
                     Ok(m) => view! { <div class="test ok">{m}</div> }.into_any(),
                     Err(e) => view! { <div class="test bad">{e}</div> }.into_any(),
                 })}
@@ -368,18 +327,46 @@ fn AiSettings() -> impl IntoView {
             <div class="field">
                 <span>{move || ctx.t("se.model")}</span>
                 <div class="key-row">
-                    <input type="text" class="mono" list="model-list" prop:value=move || ctx.settings.with(|s| s.ai.model().to_string())
+                    <input type="text" class="mono" list="model-list" spellcheck="false" prop:value=move || ctx.settings.with(|s| s.ai.model().to_string())
                         on:change=move |ev| set_model(event_target_value(&ev))/>
                     <button class="btn small" on:click=move |_| load_models()><Icon name="refresh"/>{move || ctx.t("se.models")}</button>
+                    <Show when=move || custom_model.get()>
+                        <button class="btn small" on:click=move |_| set_model(DEFAULT_AI_MODEL.into())>{move || ctx.t("se.default")}</button>
+                    </Show>
                 </div>
                 <datalist id="model-list">
                     <For each=move || models.get() key=|m| m.id.clone() children=move |m| view! {
                         <option value=m.id.clone()>{format!("{}{}", m.name, if m.free { " (free)" } else { "" })}</option>
                     }/>
                 </datalist>
-                <small class="dim">{move || if provider.get() == Provider::DeepSeek { ctx.t("se.model_ds") } else { ctx.t("se.model_or") }}</small>
+                <small class="dim">{move || ctx.t("se.model_h")}</small>
                 {move || (!models.with(|m| m.is_empty())).then(|| view! { <small class="dim">{format!("{} {}", models.with(|m| m.len()), ctx.t("se.models_n"))}</small> })}
                 {move || models_err.get().map(|e| view! { <small class="bad">{e}</small> })}
+            </div>
+
+            <div class="field">
+                <span>{move || ctx.t("se.api_key")}</span>
+                {move || if ctx.keys.with(|k| k.proxy_key) {
+                    view! {
+                        <div class="key-row">
+                            <span class="key-saved"><Icon name="lock"/>{ctx.t("se.key_in_store")}" "<em>{keystore.get()}</em></span>
+                            <button class="btn small danger-ghost" on:click=move |_| delete_key()><Icon name="trash"/>{ctx.t("se.delete_key")}</button>
+                        </div>
+                    }.into_any()
+                } else {
+                    view! {
+                        <div class="key-row">
+                            <input type="password" autocomplete="off" prop:value=move || key_input.get()
+                                on:input=move |ev| key_input.set(event_target_value(&ev))
+                                on:keydown=move |ev: web_sys::KeyboardEvent| if ev.key() == "Enter" { save_key() }/>
+                            <button class="btn primary small" on:click=move |_| save_key() disabled=move || busy.get() || key_input.get().trim().is_empty()>
+                                <Icon name="lock"/>{ctx.t("se.save_key")}
+                            </button>
+                        </div>
+                    }.into_any()
+                }}
+                <small class="dim">{move || ctx.t("se.key_h")}</small>
+                {move || ctx.keys.get().store_error.map(|e| view! { <small class="bad">{format!("{} {e}", ctx.t("se.store_err"))}</small> })}
             </div>
 
             <label class="check">
@@ -410,7 +397,7 @@ fn AiSettings() -> impl IntoView {
                     <small class="dim">{move || format!("{} {}", ctx.t("se.wipe_h"), keystore.get())}</small>
                 </div>
                 <button class="btn small" class:danger=move || wipe_armed.get() class:danger-ghost=move || !wipe_armed.get()
-                    on:click=move |_| wipe() disabled=move || !any_key.get()>
+                    on:click=move |_| wipe()>
                     <Icon name="trash"/>
                     {move || if wipe_armed.get() { ctx.t("se.wipe_confirm") } else { ctx.t("se.wipe_btn") }}
                 </button>

@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use rustshark_shared::{AiScope, AnalysisProfile, GeneratedProfile, Provider};
+use rustshark_shared::{AiScope, AnalysisProfile, GeneratedProfile};
 use serde::Serialize;
 use wasm_bindgen::JsCast;
 
@@ -12,7 +12,7 @@ use crate::util::markdown;
 #[component]
 pub fn AiPanel() -> impl IntoView {
     let ctx = use_ctx();
-    let model = Memo::new(move |_| ctx.settings.with(|s| format!("{} · {}", s.ai.provider.label(), s.ai.model())));
+    let model = Memo::new(move |_| ctx.settings.with(|s| s.ai.model_label().to_string()));
     let tab_btn = move |tab: AiTab, icon: &'static str, key: &'static str| {
         view! {
             <button class:on=move || ctx.ai_tab.get() == tab on:click=move |_| ctx.ai_tab.set(tab)>
@@ -34,13 +34,17 @@ pub fn AiPanel() -> impl IntoView {
                 {tab_btn(AiTab::Builder, "wand", "ai.tab.builder")}
                 {tab_btn(AiTab::Profiles, "bookmark", "ai.tab.profiles")}
             </div>
-            <Show when=move || !ctx.has_key()>
+            <Show when=move || !ctx.ai_ready()>
                 <div class="nokey card">
-                    <Icon name="key"/>
+                    <Icon name="server"/>
                     <div>
-                        <strong>{move || ctx.t("ai.nokey.title")}</strong>
-                        <p>{move || ctx.t("ai.nokey.text")}</p>
-                        <button class="btn primary small" on:click=move |_| { ctx.settings_section.set("ai"); ctx.modal.set(Modal::Settings) }>{move || ctx.t("ai.nokey.btn")}</button>
+                        <strong>{move || ctx.t("ai.offline.title")}</strong>
+                        <p>{move || ctx.t("ai.offline.text")}</p>
+                        <p class="bad small">{move || ctx.ai_status.get().and_then(|r| r.err()).unwrap_or_default()}</p>
+                        <div class="actions">
+                            <button class="btn primary small" on:click=move |_| ctx.check_ai()><Icon name="refresh"/>{move || ctx.t("ai.offline.retry")}</button>
+                            <button class="btn small" on:click=move |_| { ctx.settings_section.set("ai"); ctx.modal.set(Modal::Settings) }>{move || ctx.t("ai.offline.settings")}</button>
+                        </div>
                     </div>
                 </div>
             </Show>
@@ -171,8 +175,8 @@ fn Chat() -> impl IntoView {
             <div class="chat-foot dim small">
                 <span>{move || {
                     let s = ctx.settings.get();
-                    let prov = s.ai.provider.label();
-                    if s.ai.anonymize { format!("{} {prov} · {}", ctx.t("ai.privacy"), ctx.t("ai.masked")) } else { format!("{} {prov}", ctx.t("ai.privacy")) }
+                    let model = s.ai.model_label();
+                    if s.ai.anonymize { format!("{} {model} · {}", ctx.t("ai.privacy"), ctx.t("ai.masked")) } else { format!("{} {model}", ctx.t("ai.privacy")) }
                 }}</span>
                 <Show when=move || ctx.chat.with(|c| !c.is_empty())>
                     <button class="link" on:click=move |_| ctx.chat.set(Vec::new()) disabled=move || busy.get()>{move || ctx.t("ai.new_chat")}</button>
@@ -210,11 +214,6 @@ fn Builder() -> impl IntoView {
     let generate = move || {
         let goal = ctx.builder_goal.get_untracked();
         if goal.trim().is_empty() || loading.get_untracked() {
-            return;
-        }
-        if !ctx.has_key() {
-            ctx.settings_section.set("ai");
-            ctx.modal.set(Modal::Settings);
             return;
         }
         loading.set(true);
@@ -351,8 +350,4 @@ fn Profiles() -> impl IntoView {
             }/>
         </div>
     }
-}
-
-pub fn provider_key_url(p: Provider) -> String {
-    p.key_url().to_string()
 }

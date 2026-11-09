@@ -31,52 +31,19 @@ pub enum Theme {
     Dark,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    #[default]
-    DeepSeek,
-    OpenRouter,
-}
-
-impl Provider {
-    pub const ALL: [Provider; 2] = [Provider::DeepSeek, Provider::OpenRouter];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Provider::DeepSeek => "deepseek",
-            Provider::OpenRouter => "openrouter",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Provider::DeepSeek => "DeepSeek",
-            Provider::OpenRouter => "OpenRouter",
-        }
-    }
-
-    pub fn default_model(self) -> &'static str {
-        match self {
-            Provider::DeepSeek => "deepseek-chat",
-            Provider::OpenRouter => "openrouter/auto",
-        }
-    }
-
-    pub fn key_url(self) -> &'static str {
-        match self {
-            Provider::DeepSeek => "https://platform.deepseek.com/api_keys",
-            Provider::OpenRouter => "https://openrouter.ai/settings/keys",
-        }
-    }
-}
+/// Serveur IA : proxy OpenRouter compatible OpenAI (voir `server/readme_openrouter.md`).
+/// Il injecte lui-même la clé OpenRouter : RustShark n'en a pas besoin.
+pub const DEFAULT_AI_SERVER: &str = "http://127.0.0.1:9018/v1";
+/// DeepSeek Flash (alias OpenRouter qui suit toujours la dernière version).
+pub const DEFAULT_AI_MODEL: &str = "~deepseek/deepseek-flash-latest";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AiSettings {
-    pub provider: Provider,
-    pub deepseek_model: String,
-    pub openrouter_model: String,
+    /// URL de base du proxy (`.../v1`).
+    pub server_url: String,
+    /// Identifiant de modèle OpenRouter.
+    pub model: String,
     /// Masque les adresses IP/MAC locales avant envoi à l'IA.
     pub anonymize: bool,
     /// Nombre maximum de paquets inclus en exemple dans le contexte envoyé.
@@ -86,9 +53,8 @@ pub struct AiSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
-            provider: Provider::DeepSeek,
-            deepseek_model: Provider::DeepSeek.default_model().into(),
-            openrouter_model: Provider::OpenRouter.default_model().into(),
+            server_url: DEFAULT_AI_SERVER.into(),
+            model: DEFAULT_AI_MODEL.into(),
             anonymize: true,
             sample_packets: 60,
         }
@@ -96,11 +62,29 @@ impl Default for AiSettings {
 }
 
 impl AiSettings {
-    pub fn model(&self) -> &str {
-        match self.provider {
-            Provider::DeepSeek => &self.deepseek_model,
-            Provider::OpenRouter => &self.openrouter_model,
+    /// URL de base sans `/` final (valeur par défaut si vide).
+    pub fn base_url(&self) -> &str {
+        let u = self.server_url.trim().trim_end_matches('/');
+        if u.is_empty() {
+            DEFAULT_AI_SERVER
+        } else {
+            u
         }
+    }
+
+    pub fn model(&self) -> &str {
+        let m = self.model.trim();
+        if m.is_empty() {
+            DEFAULT_AI_MODEL
+        } else {
+            m
+        }
+    }
+
+    /// Nom court du modèle pour l'affichage (`~deepseek/deepseek-flash-latest` → `deepseek-flash-latest`).
+    pub fn model_label(&self) -> &str {
+        let m = self.model();
+        m.rsplit('/').next().unwrap_or(m)
     }
 }
 
@@ -490,21 +474,12 @@ pub struct GeneratedProfile {
     pub capture_filter_error: Option<String>,
 }
 
+/// Clé d'accès au proxy IA (`PROXY_API_KEYS`), facultative.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct KeyStatus {
-    pub deepseek: bool,
-    pub openrouter: bool,
+    pub proxy_key: bool,
     pub store_ok: bool,
     pub store_error: Option<String>,
-}
-
-impl KeyStatus {
-    pub fn has(&self, p: Provider) -> bool {
-        match p {
-            Provider::DeepSeek => self.deepseek,
-            Provider::OpenRouter => self.openrouter,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]

@@ -29,7 +29,7 @@ use std::time::Duration;
 use parking_lot::{Mutex, RwLock};
 use rustshark_shared::{
     filter, AiChatRequest, AiChunk, AnalysisProfile, AppSettings, CaptureState, ChatMessage, DeviceList, FlowGraph, GeneratedProfile,
-    InterfaceInfo, InternetInfo, KeyStatus, Lang, ModelInfo, NetProgress, NetworkInfo, PacketDetail, PortInfo, Provider,
+    InterfaceInfo, InternetInfo, KeyStatus, Lang, ModelInfo, NetProgress, NetworkInfo, PacketDetail, PortInfo,
     SecurityReport, SpeedResult, StartCaptureRequest, Stats, SystemInfo, ViewResponse,
 };
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -330,13 +330,13 @@ async fn key_status() -> Res<KeyStatus> {
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn set_api_key(provider: Provider, key: String) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || keystore::set(provider, &key)).await.map_err(|e| e.to_string())?
+async fn set_api_key(key: String) -> Res<()> {
+    tauri::async_runtime::spawn_blocking(move || keystore::set(&key)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn delete_api_key(provider: Provider) -> Res<()> {
-    tauri::async_runtime::spawn_blocking(move || keystore::delete(provider)).await.map_err(|e| e.to_string())?
+async fn delete_api_key() -> Res<()> {
+    tauri::async_runtime::spawn_blocking(keystore::delete).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -344,14 +344,10 @@ async fn delete_all_api_keys() -> Res<u32> {
     tauri::async_runtime::spawn_blocking(keystore::delete_all).await.map_err(|e| e.to_string())?
 }
 
-fn require_key(provider: Provider, lang: Lang) -> Res<String> {
-    keystore::get(provider)?.ok_or_else(|| {
-        format!(
-            "{} {}",
-            lang.pick("Aucune clé API enregistrée pour", "No API key saved for"),
-            provider.label()
-        )
-    })
+/// Serveur IA configuré (proxy OpenRouter) avec sa clé d'accès éventuelle.
+async fn ai_server(settings: &AppSettings) -> Res<ai::Server> {
+    let key = tauri::async_runtime::spawn_blocking(keystore::get).await.map_err(|e| e.to_string())?.ok().flatten();
+    ai::Server::new(settings.ai.base_url(), key, settings.language)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -392,54 +388,25 @@ async fn open_url(app: AppHandle, url: String) -> Res<()> {
 // ---------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
-async fn ai_test(state: State<'_, AppState>, provider: Provider) -> Res<String> {
-    let lang = state.lang();
-    let key = require_key(provider, lang)?;
-    let (url, label) = match provider {
-        Provider::DeepSeek => ("https://api.deepseek.com/user/balance", "DeepSeek"),
-        Provider::OpenRouter => ("https://openrouter.ai/api/v1/key", "OpenRouter"),
-    };
-    let resp = state.http.get(url).bearer_auth(&key).send().await.map_err(|e| e.to_string())?;
-    let status = resp.status();
-    let v: serde_json::Value = resp.json().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(match status.as_u16() {
-            401 | 403 => lang.pick("Clé refusée par le fournisseur.", "Key rejected by the provider.").into(),
-            s => format!("HTTP {s}"),
-        });
-    }
-    let detail = match provider {
-        Provider::DeepSeek => v["balance_infos"][0]["total_balance"]
-            .as_str()
-            .map(|b| format!(" — {} {b} {}", lang.pick("solde :", "balance:"), v["balance_infos"][0]["currency"].as_str().unwrap_or(""))),
-        Provider::OpenRouter => {
-            let usage = v["data"]["usage"].as_f64().unwrap_or(0.0);
-            Some(match v["data"]["limit"].as_f64() {
-                Some(limit) => format!(" — {} {usage:.2} / {limit:.2} $", lang.pick("utilisé :", "used:")),
-                None => format!(" — {} {usage:.2} $", lang.pick("utilisé :", "used:")),
-            })
-        }
-    };
-    Ok(format!("{} {label}{}", lang.pick("✅ Clé valide pour", "✅ Valid key for"), detail.unwrap_or_default()))
+async fn ai_test(state: State<'_, AppState>) -> Res<String> {
+    let settings = state.settings.read().clone();
+    let server = ai_server(&settings).await?;
+    ai::test_server(&state.http, &server, settings.language).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-async fn ai_models(state: State<'_, AppState>, provider: Provider) -> Res<Vec<ModelInfo>> {
-    let lang = state.lang();
-    let key = keystore::get(provider).ok().flatten();
-    if provider == Provider::DeepSeek && key.is_none() {
-        return Err(require_key(provider, lang).unwrap_err());
-    }
-    ai::list_models(&state.http, provider, key.as_deref(), lang).await
+async fn ai_models(state: State<'_, AppState>) -> Res<Vec<ModelInfo>> {
+    let settings = state.settings.read().clone();
+    let server = ai_server(&settings).await?;
+    ai::list_models(&state.http, &server, settings.language).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 async fn ai_chat(app: AppHandle, state: State<'_, AppState>, req: AiChatRequest) -> Res<()> {
     let settings = state.settings.read().clone();
     let lang = settings.language;
-    let provider = settings.ai.provider;
     let model = settings.ai.model().to_string();
-    let key = require_key(provider, lang)?;
+    let server = ai_server(&settings).await?;
     let display_filter = state.display_filter.read().clone();
     let context = {
         let store = state.store.read();
@@ -472,7 +439,7 @@ async fn ai_chat(app: AppHandle, state: State<'_, AppState>, req: AiChatRequest)
     let client = state.http.clone();
     let id = req.request_id;
     tauri::async_runtime::spawn(async move {
-        let res = ai::stream_chat(&client, provider, &model, &key, &messages, cancel, lang, |delta, reasoning| {
+        let res = ai::stream_chat(&client, &server, &model, &messages, cancel, lang, |delta, reasoning| {
             let _ = app.emit("ai-chunk", AiChunk { request_id: id.clone(), delta: delta.into(), reasoning, done: false, error: None });
         })
         .await;
@@ -494,8 +461,7 @@ async fn ai_cancel(state: State<'_, AppState>, request_id: String) -> Res<()> {
 async fn ai_generate_profile(state: State<'_, AppState>, goal: String, interface: Option<String>) -> Res<GeneratedProfile> {
     let settings = state.settings.read().clone();
     let lang = settings.language;
-    let provider = settings.ai.provider;
-    let key = require_key(provider, lang)?;
+    let server = ai_server(&settings).await?;
     let mut user = format!("User goal: {goal}\n");
     if let Some(iface) = interface {
         let addrs = interfaces::addresses_of(&iface);
@@ -508,7 +474,7 @@ async fn ai_generate_profile(state: State<'_, AppState>, goal: String, interface
         ChatMessage { role: "system".into(), content: ai::profile_prompt(lang) },
         ChatMessage { role: "user".into(), content: user },
     ];
-    let text = ai::complete(&state.http, provider, settings.ai.model(), &key, &messages, true, lang).await?;
+    let text = ai::complete(&state.http, &server, settings.ai.model(), &messages, true, lang).await?;
     let profile = ai::parse_profile(&text, &goal)?;
     let display_filter_error = profile
         .display_filter

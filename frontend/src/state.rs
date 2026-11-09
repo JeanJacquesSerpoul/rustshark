@@ -95,6 +95,8 @@ pub struct Ctx {
     pub profiles: RwSignal<Vec<AnalysisProfile>>,
     pub active_profile: RwSignal<Option<AnalysisProfile>>,
     pub keys: RwSignal<KeyStatus>,
+    /// Dernier test du serveur IA : `Some(Err)` = injoignable, `None` = pas encore testé.
+    pub ai_status: RwSignal<Option<Result<String, String>>>,
     pub toasts: RwSignal<Vec<Toast>>,
     pub follow: RwSignal<bool>,
     pub scroll_top: RwSignal<f64>,
@@ -214,6 +216,7 @@ impl Ctx {
             profiles: RwSignal::new(Vec::new()),
             active_profile: RwSignal::new(None),
             keys: RwSignal::new(KeyStatus::default()),
+            ai_status: RwSignal::new(None),
             toasts: RwSignal::new(Vec::new()),
             follow: RwSignal::new(true),
             scroll_top: RwSignal::new(0.0),
@@ -284,6 +287,7 @@ impl Ctx {
                 }
             }
             self.reload_keys();
+            self.check_ai();
             self.load_profiles();
             self.refresh_view();
         });
@@ -616,20 +620,20 @@ impl Ctx {
     // IA
     // -----------------------------------------------------------------------
 
-    pub fn has_key(&self) -> bool {
-        let p = self.settings.with(|s| s.ai.provider);
-        self.keys.with(|k| k.has(p))
+    /// Faux seulement si le dernier test du serveur IA a échoué.
+    pub fn ai_ready(&self) -> bool {
+        !self.ai_status.with(|s| matches!(s, Some(Err(_))))
+    }
+
+    /// Teste le serveur IA (proxy OpenRouter) et mémorise le résultat.
+    pub fn check_ai(self) {
+        spawn_local(async move {
+            self.ai_status.set(Some(call0::<String>("ai_test").await));
+        });
     }
 
     pub fn ask_ai(self, text: String, scope: AiScope) {
         if self.ai_busy.get_untracked().is_some() || text.trim().is_empty() {
-            return;
-        }
-        let provider = self.settings.with_untracked(|s| s.ai.provider);
-        if !self.keys.with_untracked(|k| k.has(provider)) {
-            self.settings_section.set("ai");
-            self.modal.set(Modal::Settings);
-            self.toast(ToastKind::Info, self.tu("ai.need_key"));
             return;
         }
         let mut history: Vec<ChatMessage> = self.chat.with_untracked(|c| {
@@ -688,6 +692,10 @@ impl Ctx {
         });
         if c.done && self.ai_busy.get_untracked().as_deref() == Some(c.request_id.as_str()) {
             self.ai_busy.set(None);
+        }
+        // Une réponse réussie prouve que le serveur IA est de nouveau joignable.
+        if c.done && c.error.is_none() && !self.ai_ready() {
+            self.ai_status.set(None);
         }
     }
 

@@ -139,16 +139,25 @@ fn permission_hint(code: i32, msg: &str, lang: Lang) -> String {
             "Accès refusé. Npcap a sans doute été installé en mode « administrateurs uniquement » : relancez RustShark en tant qu'administrateur, ou réinstallez Npcap en décochant cette option.",
             "Access denied. Npcap was probably installed in 'administrators only' mode: restart RustShark as administrator, or reinstall Npcap without that option.",
         )
+        .to_string()
     } else if cfg!(target_os = "macos") {
         lang.pick(
             "Permission refusée sur /dev/bpf*. Installez l'utilitaire « ChmodBPF » (fourni avec Wireshark) ou lancez RustShark avec sudo.",
             "Permission denied on /dev/bpf*. Install the 'ChmodBPF' helper (shipped with Wireshark) or run RustShark with sudo.",
         )
+        .to_string()
     } else {
-        lang.pick(
-            "Permission refusée. Autorisez la capture une fois pour toutes avec : sudo setcap cap_net_raw,cap_net_admin=eip /chemin/vers/rustshark",
-            "Permission denied. Allow capture once and for all with: sudo setcap cap_net_raw,cap_net_admin=eip /path/to/rustshark",
-        )
+        // Chemin réel de l'exécutable, pour une commande prête à copier-coller.
+        let exe = std::env::current_exe()
+            .ok()
+            .map(|p| p.canonicalize().unwrap_or(p).display().to_string())
+            .map(|p| if p.contains(char::is_whitespace) { format!("'{p}'") } else { p })
+            .unwrap_or_else(|| lang.pick("/chemin/vers/rustshark", "/path/to/rustshark").to_string());
+        let text = lang.pick(
+            "Permission refusée. Autorisez la capture une fois pour toutes avec : sudo setcap cap_net_raw,cap_net_admin=eip",
+            "Permission denied. Allow capture once and for all with: sudo setcap cap_net_raw,cap_net_admin=eip",
+        );
+        format!("{text} {exe}")
     };
     format!("{hint}\n({msg})")
 }
